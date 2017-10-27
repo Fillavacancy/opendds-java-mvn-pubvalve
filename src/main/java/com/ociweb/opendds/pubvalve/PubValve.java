@@ -1,5 +1,3 @@
-package com.ociweb.opendds.pubvalve;
-
 import DDS.*;
 import Nexmatix.*;
 import OpenDDS.DCPS.DEFAULT_STATUS_MASK;
@@ -24,7 +22,7 @@ public class PubValve {
     static {
         try {
             final String osName = System.getProperty("os.name").toLowerCase();
-            String nativeJarName  = null;
+            String nativeJarName = null;
             if (osName.contains("mac")) {
                 nativeJarName = "OpenDDSDarwin.jar";
             } else if (osName.contains("linux")) {
@@ -34,9 +32,9 @@ public class PubValve {
             }
 
             if (nativeJarName == null) {
-                throw new UnsupportedOperationException("No known OpenDDS native jar for OS "+ osName);
+                throw new UnsupportedOperationException("No known OpenDDS native jar for OS " + osName);
             } else {
-                System.out.println( nativeJarName + " contains native libaries for " + osName);
+                System.out.println(nativeJarName + " contains native libaries for " + osName);
             }
 
             final String currentWorkingDirString = Paths.get("").toAbsolutePath().normalize().toString();
@@ -46,11 +44,11 @@ public class PubValve {
             Files.copy(stream, jarFilePath);
             stream.close();
 
-            if(Files.exists(jarFilePath)) {
+            if (Files.exists(jarFilePath)) {
                 // unpack Jar to cwd
                 Map<String, String> libFileNameMap = new HashMap<>();
                 JarFile jar = new JarFile(jarFilePath.toString());
-                for (Enumeration<JarEntry> enumEntries = jar.entries(); enumEntries.hasMoreElements();) {
+                for (Enumeration<JarEntry> enumEntries = jar.entries(); enumEntries.hasMoreElements(); ) {
                     final JarEntry entry = enumEntries.nextElement();
                     final int startIndex = 0;
                     final int endIndex = entry.getName().indexOf(".");
@@ -83,7 +81,7 @@ public class PubValve {
                         "libOpenDDS_Rtps_Udp",
                         "libOpenDDS_DCPS_Java"
                 };
-                for (String lib: libs) {
+                for (String lib : libs) {
                     final String key = lib.toLowerCase();
                     if (libFileNameMap.containsKey(key)) {
                         final String libFileName = libFileNameMap.get(key);
@@ -101,7 +99,6 @@ public class PubValve {
     }
 
     private static final int N_MSGS = 40;
-
     private static final int VALVE_PARTICIPANT = 23;
     private static final String VALVE_TOPIC = "Valve";
 
@@ -122,11 +119,58 @@ public class PubValve {
         return false;
     }
 
+    private static final int max_manifold_id = 5;
+    private static final int valve_count = 6;
+
+    private static int serial_number(int valve_id, int manifold_id) {
+        return valve_id * 1000000 + 10010 + manifold_id;
+    }
+
+    private static String part_number(int valve_id, int manifold_id) {
+        //std::snprintf(buf, 64, "%d%dNX-DCV-SM-BLU-1-1-VO-L1-SO-OO", valve_id, manifold_id);
+        StringBuilder sb = new StringBuilder(64);
+        sb.append(valve_id);
+        sb.append(manifold_id);
+        sb.append("NX-DCV-SM-BLU-1-1-VO-L1-SO-OO");
+        return sb.toString();
+    }
+
+    private static int lifecycle_count(int valve_id, int manifold_id) {
+        int base = 1;
+        for (int i = 0; i < manifold_id / 2; ++i) {
+            base *= 10;
+        }
+        return base + valve_id;
+    }
+
+    private static void printValveData(ValveData valveData) {
+        System.out.println("manifoldId:" + valveData.manifoldId);
+        System.out.println("stationId:" + valveData.stationId);
+        System.out.println("valveSerialId:" + valveData.valveSerialId);
+        System.out.println("partNumber:" + valveData.partNumber);
+        System.out.println("leakFault:" + valveData.leakFault);
+        System.out.println("pressureFault:" + valveData.pressureFault.value());
+        System.out.println("cycles:" + valveData.cycles);
+        System.out.println("pressure:" + valveData.pressure);
+        System.out.println("durationLast12:" + valveData.durationLast12);
+        System.out.println("durationLast14:" + valveData.durationLast14);
+        System.out.println("equalizationAveragePressure:" + valveData.equalizationAveragePressure);
+        System.out.println("residualOfDynamicAnalysis:" + valveData.residualOfDynamicAnalysis);
+        System.out.println("suppliedPressure:" + valveData.suppliedPressure);
+    }
+
+    private static final int pressureFaultArray[] = {0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 2, 2, 2, 2, 2, 0};
+    private static final int suppliedPressureArray[] = {100, 90, 80, 70, 60, 65, 70, 75, 80, 80, 80, 80, 80, 80, 85, 95};
+    private static final int pressureArray[] = {90, 80, 70, 60, 50, 30, 25, 25, 35, 40, 50, 70, 70, 70, 70, 85};
+    private static final boolean leakFaultArray[] = {false, false, false, true, true, true, true, true, true, true, true, false, false, false, false, false};
+    private static final boolean valveFaultArray[] = {false, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false};
+
     public static void main(String[] args) {
 
         System.out.println("Start Valve Publisher");
         boolean reliable = checkReliable(args);
-        boolean waitForAcks = checkWaitForAcks(args);
+        //boolean waitForAcks = checkWaitForAcks(args);
+        int tick_ = 0;
 
         DomainParticipantFactory domainParticipantFactory = TheParticipantFactory.WithArgs(new StringSeqHolder(args));
         if (domainParticipantFactory == null) {
@@ -142,14 +186,14 @@ public class PubValve {
             return;
         }
 
-        ValveStatusTypeSupportImpl valveStatusTypeSupport = new ValveStatusTypeSupportImpl();
-        if (valveStatusTypeSupport.register_type(domainParticipant, "") != RETCODE_OK.value) {
+        ValveDataTypeSupportImpl valveDataTypeSupport = new ValveDataTypeSupportImpl();
+        if (valveDataTypeSupport.register_type(domainParticipant, "") != RETCODE_OK.value) {
             System.err.println("ERROR: register_type failed");
             return;
         }
 
         Topic topic = domainParticipant.create_topic(VALVE_TOPIC,
-                valveStatusTypeSupport.get_type_name(),
+                valveDataTypeSupport.get_type_name(),
                 TOPIC_QOS_DEFAULT.get(),
                 null,
                 DEFAULT_STATUS_MASK.value);
@@ -205,6 +249,7 @@ public class PubValve {
         if (reliable) {
             dataWriterQosHolder.value.reliability.kind = ReliabilityQosPolicyKind.RELIABLE_RELIABILITY_QOS;
         }
+        dataWriterQosHolder.value.durability.kind = DurabilityQosPolicyKind.TRANSIENT_LOCAL_DURABILITY_QOS;
         DataWriter dataWriter = publisher.create_datawriter(topic,
                 dataWriterQosHolder.value,
                 null,
@@ -243,47 +288,91 @@ public class PubValve {
 
         waitSet.detach_condition(statuscondition);
 
-        ValveStatusDataWriter valveStatusDataWriter = ValveStatusDataWriterHelper.narrow(dataWriter);
-
-        ValveStatus valveStatus = new ValveStatus();
-        valveStatus.valveSerialNumber = 99; // key field
-        valveStatus.timeStamp = 0;
-        valveStatus.stationNumber = 0;
-        valveStatus.cycleCountLimit = 100;
-        valveStatus.cycleCount = 0;
-        valveStatus.pressurePoint = 0.0f;
-        valveStatus.pressureFault = PressureFaultType._PRESSURE_FAULT_N;
-        valveStatus.detectedLeak = LeakDetectedType._LEAK_DETECTED_N;
-        valveStatus.input = InputType._INPUT_N;
-        int handle = valveStatusDataWriter.register_instance(valveStatus); // register key field
-
-        int ret = RETCODE_TIMEOUT.value;
-        for (; valveStatus.cycleCount < N_MSGS; ++valveStatus.cycleCount) {
-            while ((ret = valveStatusDataWriter.write(valveStatus, handle)) == RETCODE_TIMEOUT.value) {
-            }
-            if (ret != RETCODE_OK.value) {
-                System.err.println("ERROR " + valveStatus.cycleCount + " write() returned " + ret);
-            }
-            try {
-                Thread.sleep(100);
-            } catch (InterruptedException ie) {
-            }
+        ValveDataDataWriter valveDataDataWriter = ValveDataDataWriterHelper.narrow(dataWriter);
+        if (valveDataDataWriter == null) {
+            System.err.println("ERROR: write: narrow failed.");
+            return;
         }
+        boolean run_rc = true;
+        while (run_rc == true) {
 
-        if (waitForAcks) {
-            System.out.println("Publisher waiting for acks");
+            int num_data = 0;
 
-            // Wait for acknowledgements
-            Duration_t forever = new Duration_t(DURATION_INFINITE_SEC.value, DURATION_INFINITE_NSEC.value);
-            dataWriter.wait_for_acknowledgments(forever);
-        } else {
-            try {
-                Thread.sleep(1000);
-            } catch (InterruptedException ie) {
+            for (int manifold_id = 1; manifold_id <= max_manifold_id; ++manifold_id) {
+                for (int valve_id = 0; valve_id < valve_count; ++valve_id) {
+                    ValveData valveData = new ValveData();
+                    /*
+                        pressure:25
+                        durationLast12:0
+                        durationLast14:1941973408
+                        equalizationAveragePressure:32767
+                        residualOfDynamicAnalysis:32767
+                        suppliedPressure:75
+                        manifoldId:5
+                        stationId:1
+                        valveSerialId:1010015
+                        partNumber:15NX-DCV-SM-BLU-1-1-VO-L1-SO-OO
+                        leakFault:true
+                        pressureFault:0
+                     */
+                    valveData.manifoldId = manifold_id;
+                    valveData.stationId = valve_id;
+                    valveData.valveSerialId = serial_number(valve_id, manifold_id);
+                    valveData.partNumber = part_number(valve_id, manifold_id);
+                    valveData.cycles = lifecycle_count(valve_id, manifold_id) + ++tick_;
 
+                    int index = valveData.cycles % 15;
+                    System.out.println("index: " + index);
+
+                    // fault detect
+                    boolean can_fault = (manifold_id == 5);
+                    if (can_fault) {
+                        valveData.leakFault = leakFaultArray[index];
+                        valveData.pressureFault = PresureFault.from_int(pressureFaultArray[index]);
+                        valveData.valveFault = valveFaultArray[index];
+                    } else {
+                        valveData.leakFault = false;
+                        valveData.valveFault = false;
+                        valveData.pressureFault = PresureFault.NO_FAULT;
+                    }
+
+                    // data
+                    valveData.pressure = pressureArray[index];
+                    valveData.suppliedPressure = suppliedPressureArray[index];
+
+                    // init
+                    valveData.durationLast12 = 0;
+                    valveData.durationLast14 = 1941973408;
+                    valveData.equalizationAveragePressure = 32767;
+                    valveData.residualOfDynamicAnalysis = 32767;
+                    valveData.residualOfDynamicAnalysis = 32767;
+
+
+                    printValveData(valveData);
+
+                    int handle = valveDataDataWriter.register_instance(valveData);
+                    int write_rc = valveDataDataWriter.write(valveData, handle);
+                    switch (write_rc) {
+                        case RETCODE_OK.value:
+                            try { Thread.sleep(100); } catch (InterruptedException ie) { }
+                            break;
+                        case RETCODE_TIMEOUT.value:
+                            System.err.println("ERROR: received received DDS::RETCODE_TIMEOUT!");
+                            break;
+                        default:
+                            System.out.println("write_rc:" + write_rc);
+                            run_rc = false;
+                            break;
+                    }
+
+                }
+
+                num_data += 1;
             }
+            System.out.println("Published " + num_data + " samples");
+            try { Thread.sleep(1000); } catch (InterruptedException ie) { }
+
         }
-        System.out.println("Stop Publisher");
 
         // Clean up
         domainParticipant.delete_contained_entities();
@@ -294,3 +383,44 @@ public class PubValve {
     }
 
 }
+
+//        ValveStatus valveStatus = new ValveStatus();
+//        valveStatus.valveSerialNumber = 99; // key field
+//        valveStatus.timeStamp = 0;
+//        valveStatus.stationNumber = 0;
+//        valveStatus.cycleCountLimit = 100;
+//        valveStatus.cycleCount = 0;
+//        valveStatus.pressurePoint = 0.0f;
+//        valveStatus.pressureFault = PressureFaultType._PRESSURE_FAULT_N;
+//        valveStatus.detectedLeak = LeakDetectedType._LEAK_DETECTED_N;
+//        valveStatus.input = InputType._INPUT_N;
+//        int handle = valveStatusDataWriter.register_instance(valveStatus); // register key field
+//
+//        int ret = RETCODE_TIMEOUT.value;
+//        for (; valveStatus.cycleCount < N_MSGS; ++valveStatus.cycleCount) {
+//            while ((ret = valveStatusDataWriter.write(valveStatus, handle)) == RETCODE_TIMEOUT.value) {
+//            }
+//            if (ret != RETCODE_OK.value) {
+//                System.err.println("ERROR " + valveStatus.cycleCount + " write() returned " + ret);
+//            }
+//            try {
+//                Thread.sleep(100);
+//            } catch (InterruptedException ie) {
+//            }
+//        }
+//
+//
+//        if (waitForAcks) {
+//            System.out.println("Publisher waiting for acks");
+//
+//            // Wait for acknowledgements
+//            Duration_t forever = new Duration_t(DURATION_INFINITE_SEC.value, DURATION_INFINITE_NSEC.value);
+//            dataWriter.wait_for_acknowledgments(forever);
+//        } else {
+//            try {
+//                Thread.sleep(1000);
+//            } catch (InterruptedException ie) {
+//
+//            }
+//        }
+//        System.out.println("Stop Publisher");
